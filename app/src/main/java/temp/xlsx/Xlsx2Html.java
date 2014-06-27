@@ -18,6 +18,8 @@ import java.util.zip.ZipFile;
 public class Xlsx2Html {
     private static final String TAG = "Xlsx2Html";
 
+    private static final String MAIN_FILE_NAME = "[Content_Types].xml";
+    private static final String SHEET_RELATION_NAME = "xl/_rels/workbook.xml.rels";
     private final String xlsxPath;  //xlsx文件路径
     private String picCachePath;    //图片缓存目录
 
@@ -27,12 +29,12 @@ public class Xlsx2Html {
 
 
     private static void logd(String s) {
-        Log.d("Xlsx2Html", s);
+        Log.d(TAG, s);
     }
 
     /**
      * 转换xlsx文件为html格式，经验证，输出的string仅仅包括纯文本格式的txt<br>
-     * xlsx, docx, pptx 本质上是一个zip文件，你可以修改文件后缀名称，再使用解压即可看到内容
+     * xlsx, docx, pptx 本质上是一个zip文件，可以修改文件后缀名称，再解压即可看到内容
      */
     public String convert() throws Exception {
         StringBuilder html = new StringBuilder();
@@ -44,104 +46,34 @@ public class Xlsx2Html {
         final ZipFile file = new ZipFile(new File(xlsxPath));  //打开供阅读的 ZIP 文件，由指定的 File 对象给出
 
         logd("1. parse [Content_Types].xml");
-        //根据[Content_Types].xml,找出相关文件路径: sheetList, sharedStringFile
-        ZipEntry zipEntry = file.getEntry("[Content_Types].xml");
-        InputStream inputStream = file.getInputStream(zipEntry);
-        XmlPullParser xmlPullParser = Xml.newPullParser();
-        xmlPullParser.setInput(inputStream, "UTF-8");
-        int evtType = xmlPullParser.getEventType();
-        while (evtType != XmlPullParser.END_DOCUMENT) {
-            switch (evtType) {
-                case XmlPullParser.START_TAG:
-                    String tag = xmlPullParser.getName();
-                    String partName, contentType;
-                    if ("Override".equalsIgnoreCase(tag)) {
-                        contentType = xmlPullParser.getAttributeValue(null, "ContentType");
-                        partName = xmlPullParser.getAttributeValue(null, "PartName");
-                        if ("application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"
-                                .equalsIgnoreCase(contentType)) { // xl/sharedStrings.xml
-                            sharedStringFile = partName.substring(1);
-                            logd("find sharedString : " + sharedStringFile);
-                        } else if ("application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"
-                                .equalsIgnoreCase(contentType)) {
-                            sheetList.add(partName.substring(1));
-                            logd("find  sheet: " + partName);
-                        } else if ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"
-                                .equalsIgnoreCase(contentType)) {
-                            workbookStringFile = partName.substring(1);
-                            logd("find workbook: " + workbookStringFile);
-                        }
-                    }
-                    break;
-            }
-            evtType = xmlPullParser.next();
-        }
-        IOUtils.closeQuietly(inputStream);
+
+        ArrayList<String> t = setFileName(file, sheetList);
+        sharedStringFile = t.get(0);
+        workbookStringFile = t.get(1);
+        t = null;
 
         logd("2. parsing workbook.xml, file :" + workbookStringFile);
-        //解析workbook.xml, 得出sheet个数和名称
         ArrayList<String> sheetNames = new ArrayList<String>();
-        zipEntry = file.getEntry(workbookStringFile);
-        inputStream = file.getInputStream(zipEntry);
-        xmlPullParser = Xml.newPullParser();
-        xmlPullParser.setInput(inputStream, "utf-8");
-        evtType = xmlPullParser.getEventType();
-        while (evtType != XmlPullParser.END_DOCUMENT) {
-            switch (evtType) {
-                case XmlPullParser.START_TAG:
-                    String tag = xmlPullParser.getName();
-                    if ("sheet".equalsIgnoreCase(tag)) {
-                        String name = xmlPullParser.getAttributeValue(null, "name");
-                        sheetNames.add(name);
-                        logd("find sheetName: " + name);
-                    }
-                    break;
-            }
-            evtType = xmlPullParser.next();
-        }
+        setSheetNames(file, workbookStringFile, sheetNames);
 
-        IOUtils.closeQuietly(inputStream);
+        logd("3. sort sheet name,");
+        sortSheetName(file, sheetNames, sheetList);
 
         //解析sharedString.xml内容,将公用string添加到列表ls
-        logd("3. parsing sharedString...");
-        boolean flat = false;
+        logd("4. parsing sharedString...");
         ArrayList<String> sharedStrings = new ArrayList<String>();//缓存部分cell的内容/String
-        zipEntry = file.getEntry(sharedStringFile); //返回指定名称的 ZIP 文件条目,打开文件xl/sharedStrings.xml
-        inputStream = file.getInputStream(zipEntry);   // 返回输入流以读取指定 ZIP 文件条目的内容
-        XmlPullParser xmlParser = Xml.newPullParser(); //Returns a new pull parser with namespace support.
-        xmlParser.setInput(inputStream, "UTF-8");
-        evtType = xmlParser.getEventType();
-        StringBuilder oneString = new StringBuilder();
-        while (evtType != XmlPullParser.END_DOCUMENT) {// 以pull方式解析xml文件
-            switch (evtType) {
-                case XmlPullParser.START_TAG:
-                    String tag = xmlParser.getName();
-                    if ("t".equalsIgnoreCase(tag)) {
-                        oneString.append(xmlParser.nextText());
-                    }
-                    break;
-                case XmlPullParser.END_TAG:
-                    if("si".equalsIgnoreCase(xmlParser.getName())){ // one <si> </si> is a string
-                        sharedStrings.add(oneString.toString());
-                        oneString.setLength(0);
-                    }
-                    break;
-                default:
-                    break;
-            }
-            evtType = xmlParser.next();
-        }
-        IOUtils.closeQuietly(inputStream);
+        setSharedString(file, sharedStringFile, sharedStrings);
 
-        logd("4. parsing sheet Files, size : "+sheetList.size());
+        logd("5. parsing every sheet Files, size : " + sheetList.size());
+        boolean flat = false;
         for (String oneSheet : sheetList) {
             logd("---------start parse sheet file:  " + oneSheet);
             html.append("<p><p>" + sheetNames.remove(0) + "</p>");
-            zipEntry = file.getEntry(oneSheet);
-            inputStream = file.getInputStream(zipEntry);
+            ZipEntry zipEntry = file.getEntry(oneSheet);
+            InputStream inputStream = file.getInputStream(zipEntry);
             XmlPullParser xmlParserSheet = Xml.newPullParser();
             xmlParserSheet.setInput(inputStream, "UTF-8");
-            evtType = xmlParserSheet.getEventType();
+            int evtType = xmlParserSheet.getEventType();
             //firstly, find tag <mergeCell />
             ArrayList<String> mergeCells = new ArrayList<String>();
             while (evtType != XmlPullParser.END_DOCUMENT) {
@@ -155,12 +87,12 @@ public class Xlsx2Html {
                 logd("find mergeCell ref : " + mergeCell); // eg: B4:D4
                 evtType = xmlParserSheet.next();
             }
-            logd("4.1 find mergeCell over! , start parse sheet.");
+            logd("5.1 find mergeCell over! , start parse sheet.");
 
             ArrayList<String> mergePrefixs = new ArrayList<String>();
             for (String merge : mergeCells)  //find every prefix
                 mergePrefixs.add(merge.substring(0, merge.indexOf(":")));    //eg:  B4:D4 --> B4
-            // secondly,
+            // secondly, find every cell, parse it and append the html
             IOUtils.closeQuietly(inputStream);
             inputStream = file.getInputStream(zipEntry);
             xmlParserSheet = Xml.newPullParser();
@@ -202,7 +134,7 @@ public class Xlsx2Html {
                         if (!html.toString().endsWith("<td>"))
                             html.append(tagHtml);
                         else {
-                            html.delete(html.length()-4,html.length());
+                            html.delete(html.length() - 4, html.length());
                         }
                         break;
                 }
@@ -216,7 +148,176 @@ public class Xlsx2Html {
         return html + "</body></html>";
     }
 
-    /** 根据cellid和merageCells 来获取cell的span信息  返回span 描述*/
+    /**
+     * 根据[Content_Types].xml,找出相关文件路径: sheetList, sharedStringFile
+     * @param file  表示xlsx文件
+     * @param sheetList 要设置的sheet文件路径的列表
+     * @return 一个ArrayList 第一个元素是sharedString.xml 第二个元素是workbook.xml的文件路径
+     * */
+    private ArrayList<String> setFileName(ZipFile file, ArrayList<String> sheetList) throws Exception {
+        ArrayList<String> temp = new ArrayList<String>(2);  //size must be 2.
+        temp.add("1"); temp.add("2");
+        ZipEntry zipEntry = file.getEntry(MAIN_FILE_NAME);
+        InputStream inputStream = file.getInputStream(zipEntry);
+        XmlPullParser xmlPullParser = Xml.newPullParser();
+        xmlPullParser.setInput(inputStream, "UTF-8");
+        int evtType = xmlPullParser.getEventType();
+        while (evtType != XmlPullParser.END_DOCUMENT) {
+            switch (evtType) {
+                case XmlPullParser.START_TAG:
+                    String tag = xmlPullParser.getName();
+                    String partName, contentType;
+                    if ("Override".equalsIgnoreCase(tag)) {
+                        contentType = xmlPullParser.getAttributeValue(null, "ContentType");
+                        partName = xmlPullParser.getAttributeValue(null, "PartName");
+                        if ("application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"
+                                .equalsIgnoreCase(contentType)) { // xl/sharedStrings.xml
+                            temp.set(0, partName.substring(1));
+                            logd("find sharedString : " + partName);
+                        } else if ("application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"
+                                .equalsIgnoreCase(contentType)) {
+                            sheetList.add(partName.substring(1));
+                            logd("find  sheet: " + partName);
+                        } else if ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"
+                                .equalsIgnoreCase(contentType)) {
+                            temp.set(1, partName.substring(1));
+                            logd("find workbook: " + partName);
+                        }
+                    }
+                    break;
+            }
+            evtType = xmlPullParser.next();
+        }
+        IOUtils.closeQuietly(inputStream);
+        return temp;
+    }
+
+    /**
+     * 解析workbook.xml, 得出sheet个数和名称, 填充到sheetNames
+     * @param file                  表示xlsx文件
+     * @param workbookStringFile    workbook文件的路径
+     * @param sheetNames            要设置的sheet名称列表
+     */
+    private void setSheetNames(ZipFile file, String workbookStringFile, ArrayList<String> sheetNames) throws Exception {
+        ZipEntry zipEntry = file.getEntry(workbookStringFile);
+        InputStream inputStream = file.getInputStream(zipEntry);
+        XmlPullParser xmlPullParser = Xml.newPullParser();
+        xmlPullParser.setInput(inputStream, "UTF-8");
+        int evtType = xmlPullParser.getEventType();
+        while (evtType != XmlPullParser.END_DOCUMENT) {
+            switch (evtType) {
+                case XmlPullParser.START_TAG:
+                    String tag = xmlPullParser.getName();
+                    if ("sheet".equalsIgnoreCase(tag)) {
+                        String name = xmlPullParser.getAttributeValue(null, "name");
+                        sheetNames.add(name);
+                        logd("find sheetName: " + name);
+                    }
+                    break;
+            }
+            evtType = xmlPullParser.next();
+        }
+        IOUtils.closeQuietly(inputStream);
+    }
+
+    /**
+     * 排序sheet name, 使之和 file name 列表对应,
+     *
+     * @param zipFile    表示xlsx文件
+     * @param sheetNames sheet标签列表
+     * @param filenames  待排序的sheet内容文件名的列表
+     */
+    private void sortSheetName(ZipFile zipFile, ArrayList<String> sheetNames, ArrayList<String> filenames) {
+//        HashMap<String, String> name_file = new HashMap<String, String>();
+        try {
+            if (filenames.size() < 2) return;  // need no sort if only one sheet.
+            ArrayList<Integer> ins = new ArrayList<Integer>();
+            for (String fn : filenames) {       //从filenames中摘取出数字,存到ins列表
+                int firstDigit = indexOfFirstDigit(fn);
+                String digit = "";
+                do {
+                    digit += fn.charAt(firstDigit);
+                    firstDigit++;
+                } while (Character.isDigit(fn.charAt(firstDigit)));
+                ins.add(Integer.parseInt(digit));
+            }
+            //sort ins, do same sort for filenames
+            for (int i = 0; i < ins.size(); i++) {
+                int min = ins.get(i);
+                for (int j = i + 1; j < ins.size(); j++) {
+                    if (min > ins.get(j)) {
+                        min = ins.get(i);
+                        ins.set(i, ins.get(j));
+                        ins.set(j, min);
+                        String temp = filenames.get(i);
+                        filenames.set(i, filenames.get(j));
+                        filenames.set(j, temp);
+                    }
+                }
+            }
+            // 目前以sheet文件名后面的数字大小来排序
+            //:TODO maybe should sort according to rId, workbook.xml,and workbook.xml.rels.
+//            ZipEntry sheetRelation = zipFile.getEntry(SHEET_RELATION_NAME);
+//            InputStream is = zipFile.getInputStream(sheetRelation);
+//            XmlPullParser xpp = Xml.newPullParser();
+//            xpp.setInput(is, "utf-8");
+//            int evtType = xpp.getEventType();
+//            while (evtType != XmlPullParser.END_DOCUMENT) {
+//                if (evtType == XmlPullParser.START_TAG) {
+//                    String tag = xpp.getName();
+//                    if (tag.equalsIgnoreCase("Relationship")) {
+//                        String id = xpp.getAttributeValue(null, "Id"),
+//                                type = xpp.getAttributeValue(null, "Type"),
+//                                target = xpp.getAttributeValue(null, "Target");
+//                        if (type.endsWith("worksheet"))     // must be sheet
+//                            name_file.put(id,target);
+//                    }
+//                }
+//                evtType = xpp.next();
+//            }
+//
+//            // parse workbook.xml
+//
+        } catch (Exception e) {
+            logd("sortSheetName failed. " + e);
+        }
+    }
+
+    /**
+     * 解析 sharedString文件， 获取共享的string列表，存到 list中
+     */
+    private void setSharedString(ZipFile file, String sharedStringFile, ArrayList<String> ls) throws Exception {
+        ZipEntry zipEntry = file.getEntry(sharedStringFile); //返回指定名称的 ZIP 文件条目,打开文件xl/sharedStrings.xml
+        InputStream inputStream = file.getInputStream(zipEntry);   // 返回输入流以读取指定 ZIP 文件条目的内容
+        XmlPullParser xmlParser = Xml.newPullParser(); //Returns a new pull parser with namespace support.
+        xmlParser.setInput(inputStream, "UTF-8");
+        int evtType = xmlParser.getEventType();
+        StringBuilder oneString = new StringBuilder();
+        while (evtType != XmlPullParser.END_DOCUMENT) {// 以pull方式解析xml文件
+            switch (evtType) {
+                case XmlPullParser.START_TAG:
+                    String tag = xmlParser.getName();
+                    if ("t".equalsIgnoreCase(tag)) {
+                        oneString.append(xmlParser.nextText());
+                    }
+                    break;
+                case XmlPullParser.END_TAG:
+                    if ("si".equalsIgnoreCase(xmlParser.getName())) { // one <si> </si> is a string
+                        ls.add(oneString.toString());
+                        oneString.setLength(0);
+                    }
+                    break;
+                default:
+                    break;
+            }
+            evtType = xmlParser.next();
+        }
+        IOUtils.closeQuietly(inputStream);
+    }
+
+    /**
+     * 根据cellid和merageCells 来获取cell的span信息  返回span 描述
+     */
     private String getCellSpan(String cellId, ArrayList<String> mCS) {
         String spanDes = "";
         //cellId must equal mCS's prefix.  eg  ( B2,   B2:C4 )

@@ -11,7 +11,7 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 
 public class XlsxShow extends Activity {
-    final String TAG = "XlsxShow";
+    private final String TAG = "XlsxShow";
     Handler handler = new Handler();
     ProgressDialog pd;
     WebView webView;
@@ -33,10 +33,10 @@ public class XlsxShow extends Activity {
         AsyncTask<String,Integer,String> at = new AsyncTask<String, Integer, String>() {
             @Override
             protected void onPreExecute(){
-//                pd=new ProgressDialog(XlsxShow.this);
-//                pd.setMessage("正在对文件进行解析...");
-//                pd.setCanceledOnTouchOutside(false);
-//                pd.show();
+                pd=new ProgressDialog(XlsxShow.this);
+                pd.setMessage("正在对文件进行解析...");
+                pd.setCanceledOnTouchOutside(false);
+                pd.show();
             }
 
             @Override
@@ -46,17 +46,15 @@ public class XlsxShow extends Activity {
                 try{
                     Xlsx2Html x2h = new Xlsx2Html(path);
                     html = x2h.convert();
-//                    html = ToHtml.main(new String[]{path,path+".html"});//x2h.convert();
-//                    html = "<html><body><h1>"+" convert success!"+"</h1></body></html>";
                 }catch (Exception e){
-                    html = "<html><body><h5> (XlsxShow)<br>"+e.toString()+"</h5></body></html>";
+                    html = "<html><body><h1> (XlsxShow)<br>"+e.toString()+"</h1></body></html>";
                 }
                 Log.d(TAG,html);
                 return html;
             }
             @Override
             protected void onPostExecute(String html){
-//                pd.dismiss();
+                pd.dismiss();
                 if (webView != null) {
                     WebSettings webSettings = webView.getSettings();
                     webSettings.setJavaScriptEnabled(true);
